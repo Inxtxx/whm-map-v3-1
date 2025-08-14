@@ -3,30 +3,31 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>WHM 462 集签地图 · V3.1（ABS 官方 POA · 蓝底）</title>
+<title>WHM 462 集签地图 · V3.1（强制最小缩放 · 中文行业）</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
-<!-- Esri Leaflet 用于直接读 ABS 的 ArcGIS 服务 -->
+<!-- Esri Leaflet：用于直接读取 ABS 官方 POA 服务；失败时自动回退到 GeoJSON -->
 <script src="https://cdn.jsdelivr.net/npm/esri-leaflet@3.0.12/dist/esri-leaflet.js"></script>
 <style>
   html,body,#map{height:100%;margin:0;background:#0b1d3d;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,"PingFang SC","Microsoft YaHei",sans-serif}
-  .legend{position:absolute;left:12px;bottom:12px;background:#fff;color:#000;padding:10px 12px;border-radius:8px;box-shadow:0 1px 6px rgba(0,0,0,.2);font-size:12px;line-height:1.5}
+  .legend{position:absolute;left:12px;bottom:12px;background:#fff;color:#000;padding:10px 12px;border-radius:8px;box-shadow:0 1px 6px rgba(0,0,0,.2);font-size:12px;line-height:1.5;z-index:900}
   .legend .row{display:flex;align-items:center;margin:3px 0}
   .sw{width:16px;height:16px;border-radius:3px;margin-right:8px;border:1px solid #9db3ff99}
-  .panel{position:absolute;right:12px;top:12px;max-width:460px;background:#fff;padding:12px;border-radius:8px;box-shadow:0 1px 8px rgba(0,0,0,.25);display:none}
+  .panel{position:absolute;right:12px;top:12px;max-width:460px;background:#fff;padding:12px;border-radius:8px;box-shadow:0 1px 8px rgba(0,0,0,.25);display:none;z-index:901}
   .panel h3{margin:0 0 6px;font-size:16px}
   .job{border-top:1px solid #eee;padding:8px 0}
   .job a{color:#0b5fff;text-decoration:none}
   .job small{display:block;color:#666}
   .pill{display:inline-block;background:#eef;border-radius:999px;padding:2px 8px;margin:2px 4px 0 0;font-size:12px}
   .note{font-size:12px;color:#444;margin-top:6px}
-  .badge{position:absolute;left:12px;top:12px;background:#fff;color:#222;padding:8px 10px;border-radius:8px;box-shadow:0 1px 6px rgba(0,0,0,.18);font-size:12px}
+  .badge{position:absolute;left:12px;top:12px;background:#fff;color:#222;padding:8px 10px;border-radius:8px;box-shadow:0 1px 6px rgba(0,0,0,.18);font-size:12px;z-index:902}
+  .btn{display:inline-block;background:#0b5fff;color:#fff;border-radius:6px;padding:6px 10px;font-weight:600;text-decoration:none}
 </style>
 </head>
 <body>
 <div id="map"></div>
 
-<div class="badge" id="badge">状态：加载中…（ABS 官方 POA 已启用）</div>
+<div class="badge" id="badge">状态：初始化…</div>
 
 <div class="legend">
   <div style="font-weight:700;margin-bottom:6px;color:#000">可集签岗位（近10天）· 五级蓝色</div>
@@ -37,26 +38,24 @@
   <div class="row"><span class="sw" style="background:#1e6bff"></span>51+</div>
   <div style="margin:6px 0;border-top:1px dashed #ccc"></div>
   <div class="row"><span class="sw" style="background:#e4e6eb;border:1px dashed #ff4d4f"></span><span style="color:#c0392b">不可集签（462）</span></div>
-  <div class="note">边界：ABS POA 2021（官方）；底图：纯蓝背景。</div>
 </div>
 
 <div class="panel" id="jobsPanel">
   <h3 id="jobsTitle"></h3>
-  <div id="jobsSub"></div>
+  <div id="jobsSub" style="margin-bottom:6px;"></div>
   <div id="jobsList"></div>
   <div class="note">岗位来源：Workforce Australia（官方）。仅统计近10天，并按 462 行业口径筛选。</div>
 </div>
 
 <script>
-// ========== 常量 ==========
-const ABS_POA_LAYER = 'https://geo.abs.gov.au/arcgis/rest/services/ASGS2021/POA/MapServer/1'; // POA_GEN (简化多边形)
+// ========= 常量 =========
+const ABS_POA_LAYER = 'https://geo.abs.gov.au/arcgis/rest/services/ASGS2021/POA/MapServer/1'; // 官方 POA_GEN
+const COMMUNITY_GEOJSON = 'https://cdn.jsdelivr.net/gh/ferocia/australia-geojsons@master/outputs/au-postcodes-Visvalingam-5.geojson'; // 备用
+const AUS_BOUNDS = L.latLngBounds(L.latLng(-44.5,110.0), L.latLng(-9.0,155.0)); // 澳大利亚大致范围
 const blue5 = n => n<=0 ? '#eaf2ff' : n<=5 ? '#cfe1ff' : n<=20 ? '#9fc2ff' : n<=50 ? '#5b94ff' : '#1e6bff';
 const STYLE_INELIG = { fillColor:'#e4e6eb', color:'#ff4d4f', weight:1.2, dashArray:'6,4', fillOpacity:.35, opacity:.95 };
 
-// 岗位数据（若 data/jobs-last10d.json 存在会自动覆盖；否则为占位 0）
-let JOBS = { perPOA:{} };
-
-// ========== 462 规则（与之前一致，只把行业名改成中文输出） ==========
+// ========= 462 规则（中文行业，内置）=========
 const RULES = {
   tourismExtraPostcodes: ["4406","4416","4498","7215"],
   northern: {
@@ -97,8 +96,13 @@ const RULES = {
   }
 };
 
-// —— 辅助函数 ——  
-function inRanges(ranges, pc){
+// ========= 岗位数据（占位；若仓库有 data/jobs-last10d.json 会覆盖）=========
+let JOBS = { perPOA:{} };
+
+// ========= 工具 =========
+const badge = (txt)=>{ const b=document.getElementById('badge'); if(b) b.innerHTML=txt; };
+const blueStyle = n => ({ fillColor: blue5(n), color:'#183a7a', weight:.6, fillOpacity:.72, opacity:.95 });
+const inRanges = (ranges, pc) => {
   pc=String(pc).padStart(4,'0');
   return (ranges||[]).some(s=>{
     s=String(s).trim();
@@ -106,101 +110,162 @@ function inRanges(ranges, pc){
     if(s.includes('-')){ const[a,b]=s.split('-').map(x=>parseInt(x,10)); const n=parseInt(pc,10); return n>=a&&n<=b; }
     return pc===s.padStart(4,'0');
   });
+};
+const stateByPc = (pc)=>{ pc=String(pc).padStart(4,'0'); const p=pc[0]; if(p==='2')return'NSW'; if(p==='3')return'VIC'; if(p==='4')return'QLD'; if(p==='5')return'SA'; if(p==='6')return'WA'; if(p==='7')return'TAS'; if(p==='0'||p==='8'||p==='9')return'NT'; return'Other'; };
+const inRegional = (pc)=>{ const st=stateByPc(pc); const segs=(RULES.regionalByState[st]||[]); if(segs.includes('ALL')) return true; return inRanges(segs, pc); };
+const inRemoteVR = (pc)=>{ const st=stateByPc(pc); const segs=(RULES.remoteVRByState[st]||[]); if(segs.includes('ALL')) return true; if(inRanges(segs, pc)) return true; return (RULES.tourismExtraPostcodes||[]).includes(String(pc).padStart(4,'0')); };
+const inNorthern = (pc)=>{ const s=stateByPc(pc); if(s==='NT' && RULES.northern.ntAll) return true; return (RULES.northern.postcodes||[]).includes(String(pc).padStart(4,'0')); };
+const industriesZH = (pc)=>{ const t=[]; if(inNorthern(pc)||inRemoteVR(pc)) t.push('旅游与酒店业'); if(inNorthern(pc)||inRegional(pc)){ t.push('植物与动物栽培'); t.push('建筑业'); } if(inNorthern(pc)) t.push('渔业与珍珠养殖 / 林业种植与采伐'); return t; };
+const getCount = (pc)=> (JOBS?.perPOA?.[pc]?.count) || 0;
+const getItems = (pc)=> (JOBS?.perPOA?.[pc]?.items) || [];
+
+// 备用 GeoJSON 的属性适配
+function getPOAfromAnyProps(props){
+  const keys=['poa_code_2021','POA_CODE21','postcode','POA_CODE','code','id','name'];
+  for(const k of keys){
+    const v = props[k];
+    if(!v) continue;
+    const m = String(v).match(/\b(\d{4})\b/);
+    if(m) return m[1];
+  }
+  // 全量兜底：在每个值里找四位数字
+  for(const v of Object.values(props)){
+    const m = String(v).match(/\b(\d{4})\b/);
+    if(m) return m[1];
+  }
+  return null;
 }
-function stateByPc(pc){
-  pc=String(pc).padStart(4,'0'); const p=pc[0];
-  if(p==='2') return 'NSW'; if(p==='3') return 'VIC'; if(p==='4') return 'QLD';
-  if(p==='5') return 'SA';  if(p==='6') return 'WA';  if(p==='7') return 'TAS';
-  if(p==='0'||p==='8'||p==='9') return 'NT'; return 'Other';
-}
-function inRegional(pc){ const st=stateByPc(pc); const segs=(RULES.regionalByState[st]||[]); if(segs.includes('ALL')) return true; return inRanges(segs,pc); }
-function inRemoteVR(pc){ const st=stateByPc(pc); const segs=(RULES.remoteVRByState[st]||[]); if(segs.includes('ALL')) return true; if(inRanges(segs,pc)) return true; return (RULES.tourismExtraPostcodes||[]).includes(String(pc).padStart(4,'0')); }
-function inNorthern(pc){ const s=stateByPc(pc); if(s==='NT' && RULES.northern.ntAll) return true; return (RULES.northern.postcodes||[]).includes(String(pc).padStart(4,'0')); }
-function industriesFor462ZH(pc){
-  const zh=[];
-  if(inNorthern(pc) || inRemoteVR(pc)) zh.push('旅游与酒店业');
-  if(inNorthern(pc) || inRegional(pc)){ zh.push('植物与动物栽培'); zh.push('建筑业'); }
-  if(inNorthern(pc)) zh.push('渔业与珍珠养殖 / 林业种植与采伐');
-  return zh;
+const getPOAName = (props) => props.poa_name_2021 || props.POA_NAME21 || props.name || ('邮编 '+getPOAfromAnyProps(props));
+
+// 限制视图：澳大利亚最小占视窗 60%，且不可拖太远
+function applyViewConstraints(map){
+  const resize = ()=>{
+    const size = map.getSize();
+    const padX = Math.round(size.x * 0.20);   // 左右各 20% padding ⇒ 澳大利亚至少占 60%
+    const padY = Math.round(size.y * 0.20);   // 上下各 20%
+    const minZ = map.getBoundsZoom(AUS_BOUNDS, true, { paddingTopLeft:[padX,padY], paddingBottomRight:[padX,padY] });
+    map.setMinZoom(minZ);
+    if(map.getZoom() < minZ) map.setZoom(minZ);
+  };
+  map.setMaxBounds(AUS_BOUNDS.pad(0.18));   // 周边留一点海域
+  map.options.maxBoundsViscosity = 0.9;
+  map.fitBounds(AUS_BOUNDS, { padding:[50,50] });
+  resize();
+  map.on('resize', resize);
 }
 
-// —— 读取（可选）岗位数据 ——  
 async function loadJobs(){
   try{
     const r = await fetch('data/jobs-last10d.json',{cache:'no-store'});
-    if(r.ok){ JOBS = await r.json(); }
+    if(r.ok) JOBS = await r.json();
   }catch{}
 }
 
-// —— 地图初始化 ——  
+// 绑定一个多边形的交互（无论来自 ABS 还是 GeoJSON）
+function bindPolygonUI(layer, props, sourceTag){
+  const pc = props.poa_code_2021 || props.POA_CODE21 || getPOAfromAnyProps(props);
+  if(!pc) return;
+  const name = props.poa_name_2021 || props.POA_NAME21 || getPOAName(props);
+  const inds = industriesZH(pc);
+  const n = getCount(pc);
+
+  // 初始样式
+  if(!inds.length) layer.setStyle(STYLE_INELIG);
+  else layer.setStyle(blueStyle(n));
+
+  layer.on('mouseover', (e)=>{
+    const html = `
+      <div style="font-weight:700;margin-bottom:4px;">${name}（邮编 ${pc}）</div>
+      <div>${inds.length? '可集签行业：'+inds.map(i=>`<span class="pill">${i}</span>`).join(' ') : '<span style="color:#c0392b">不可集签（462）</span>'}</div>
+      <div style="margin-top:6px;">近10天岗位总数：<b>${getCount(pc)}</b></div>`;
+    layer.bindTooltip(html,{sticky:true,opacity:.97,direction:'top',offset:[0,-6]}).openTooltip(e.latlng);
+    if(inds.length) layer.setStyle({weight:1.2,fillOpacity:.85});
+  });
+  layer.on('mouseout', ()=>{ if(inds.length) layer.setStyle({weight:.6,fillOpacity:.72}); });
+
+  layer.on('click', ()=>{
+    const panel=document.getElementById('jobsPanel');
+    const title=document.getElementById('jobsTitle');
+    const sub=document.getElementById('jobsSub');
+    const list=document.getElementById('jobsList');
+    const items=getItems(pc);
+
+    title.textContent = `${name}（邮编 ${pc}）`;
+    sub.innerHTML = `${inds.length? '可集签行业：'+inds.map(i=>`<span class="pill">${i}</span>`).join(' ') : '<span style="color:#c0392b">不可集签（462）</span>'} · 近10天岗位：<b>${getCount(pc)}</b>`;
+    list.innerHTML='';
+    if(!items.length){
+      const wf = `https://www.workforceaustralia.gov.au/individuals/jobs/search?searchText=${encodeURIComponent(pc)}`;
+      list.innerHTML = `<div class="note">暂未抓到该地区的岗位清单（或数据尚未更新）。<br/>可先在官方查看：<a class="btn" href="${wf}" target="_blank" rel="noopener">打开 Workforce Australia（搜索 ${pc}）</a></div>`;
+    }else{
+      items.slice(0,120).forEach(it=>{
+        const d=document.createElement('div'); d.className='job';
+        d.innerHTML = `<a href="${it.url}" target="_blank" rel="noopener">${(it.title||'职位').trim()}</a>
+                       <small>${(it.company||'').trim()} ${it.location? '· '+it.location:''} ${it.age||''}</small>`;
+        list.appendChild(d);
+      });
+    }
+    panel.style.display='block';
+    layer.bringToFront();
+  });
+}
+
+// 主流程
 async function init(){
   await loadJobs();
 
-  const map=L.map('map',{preferCanvas:true,zoomControl:true}).setView([-25.3,133.8],4);
+  const map = L.map('map',{preferCanvas:true, zoomControl:true, worldCopyJump:false, scrollWheelZoom:true});
+  applyViewConstraints(map);       // ★ 强制最小缩放 & 限制可拖动范围
 
-  // 用 ABS 官方的 POA 图层（Feature Layer）
-  const poaLayer = L.esri.featureLayer({
-    url: ABS_POA_LAYER,
-    simplifyFactor: 0.35,
-    precision: 5,
-    fields: ['poa_code_2021','poa_name_2021'],
-    style: function(feature){
-      const pc = feature.properties.poa_code_2021;
-      const inds = industriesFor462ZH(pc);
-      if(!inds.length) return STYLE_INELIG;
-      const n = (JOBS?.perPOA?.[pc]?.count) || 0;
-      return { fillColor: blue5(n), color:'#193a7a', weight:.6, fillOpacity:.72, opacity:.95 };
-    }
-  }).addTo(map);
+  badge('状态：加载地图图层…');
 
-  // 为每个区块绑定交互：悬停提示、点击右侧清单
-  poaLayer.on('createfeature', function(e){
-    const layer = e.layer;
-    const props = e.feature.properties;
-    const pc = props.poa_code_2021;
-    const name = props.poa_name_2021;
-    const inds = industriesFor462ZH(pc);
+  // 先尝试 ABS 官方 POA
+  let usedABS = false;
+  let featuresLoaded = 0;
 
-    layer.on('mouseover', (ev)=>{
-      const n=(JOBS?.perPOA?.[pc]?.count)||0;
-      const html = `
-        <div style="font-weight:700;margin-bottom:4px;">${name}（邮编 ${pc}）</div>
-        <div>${inds.length? '可集签行业：'+inds.map(i=>`<span class="pill">${i}</span>`).join(' ') : '<span style="color:#c0392b">不可集签（462）</span>'}</div>
-        <div style="margin-top:6px;">近10天岗位总数：<b>${n}</b></div>`;
-      layer.bindTooltip(html,{sticky:true,opacity:.97,direction:'top',offset:[0,-6]}).openTooltip(ev.latlng);
-      layer.setStyle({weight:1.2,fillOpacity:.85});
+  try{
+    const absLayer = L.esri.featureLayer({
+      url: ABS_POA_LAYER,
+      simplifyFactor: 0.35,
+      precision: 5,
+      fields: ['poa_code_2021','poa_name_2021'],
+      style: { color:'#183a7a', weight:.6, fillOpacity:.72, opacity:.95 } // 先给默认，等绑定时再按规则替换
+    }).addTo(map);
+
+    absLayer.on('createfeature', (e)=>{
+      usedABS = true;
+      featuresLoaded++;
+      bindPolygonUI(e.layer, e.feature.properties, 'ABS');
     });
-    layer.on('mouseout', ()=> layer.setStyle({weight:.6,fillOpacity:.72}));
 
-    layer.on('click', ()=>{
-      const panel=document.getElementById('jobsPanel');
-      const title=document.getElementById('jobsTitle');
-      const sub=document.getElementById('jobsSub');
-      const list=document.getElementById('jobsList');
-      const n=(JOBS?.perPOA?.[pc]?.count)||0;
-      const items=(JOBS?.perPOA?.[pc]?.items)||[];
-
-      title.textContent = `${name}（邮编 ${pc}）`;
-      sub.innerHTML = `${inds.length? '可集签行业：'+inds.map(i=>`<span class="pill">${i}</span>`).join(' ') : '<span style="color:#c0392b">不可集签（462）</span>'} · 近10天岗位：<b>${n}</b>`;
-      list.innerHTML='';
-      if (!items.length) {
-        const wf = `https://www.workforceaustralia.gov.au/individuals/jobs/search?searchText=${encodeURIComponent(pc)}`;
-        list.innerHTML = `<div class="note">此区域暂未抓到岗位清单（或尚未更新）。你可以先查看官方检索：<a href="${wf}" target="_blank" rel="noopener">Workforce Australia（搜索 ${pc}）</a></div>`;
-      } else {
-        items.slice(0,120).forEach(it=>{
-          const div=document.createElement('div'); div.className='job';
-          div.innerHTML = `<a href="${it.url}" target="_blank" rel="noopener">${(it.title||'职位').trim()}</a>
-                           <small>${(it.company||'').trim()} ${it.location? '· '+it.location:''} ${it.age||''}</small>`;
-          list.appendChild(div);
-        });
+    // 7 秒内如果没有加载到要素，判定为失败并走备用
+    setTimeout(()=>{
+      if(!usedABS || featuresLoaded===0){
+        map.removeLayer(absLayer);
+        loadBackup(map);
+      }else{
+        badge('状态：已就绪 · 数据源：ABS · 最小缩放=60%');
       }
-      panel.style.display='block';
-      layer.bringToFront();
-    });
-  });
+    }, 7000);
+  }catch(e){
+    loadBackup(map);
+  }
 
-  const b=document.getElementById('badge');
-  if(b){ b.innerHTML='状态：<b>就绪</b> · ABS 官方 POA · 岗位数据 '+(JOBS && JOBS.perPOA && Object.keys(JOBS.perPOA).length?'已加载':'占位'); }
+  function loadBackup(map){
+    fetch(COMMUNITY_GEOJSON).then(r=>r.json()).then(geo=>{
+      const layer = L.geoJSON(geo, {
+        style: f=>{
+          const pc = getPOAfromAnyProps(f.properties);
+          const inds = industriesZH(pc);
+          if(!inds.length) return STYLE_INELIG;
+          return blueStyle(getCount(pc));
+        },
+        onEachFeature: (f, poly)=> bindPolygonUI(poly, f.properties, 'BACKUP')
+      }).addTo(map);
+      badge('状态：已就绪 · 数据源：备用 GeoJSON · 最小缩放=60%');
+    }).catch(()=>{
+      badge('状态：加载失败（请刷新重试）');
+    });
+  }
 }
 
 document.addEventListener('DOMContentLoaded', init);
